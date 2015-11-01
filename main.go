@@ -2,10 +2,14 @@ package main
 
 import (
 	"fmt"
-	"github.com/golang/groupcache/lru"
 	"os"
 	"os/signal"
 	"time"
+)
+
+const (
+	MAX_CACHES = 128
+	EXPIRE_SECONDS = 600
 )
 
 func main() {

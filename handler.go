@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/golang/groupcache/lru"
 	"github.com/miekg/dns"
-	"net"
+	"time"
 )
 
 const (
@@ -14,6 +14,8 @@ const (
 	_IP4Query  = 4
 	_IP6Query  = 6
 )
+
+
 
 type Question struct {
 	qname  string
@@ -27,17 +29,17 @@ func (q *Question) String() string {
 
 type GODNSHandler struct {
 	resolver *Resolver
-	Cache    *lru.Cache
+	Cache    *MemoryCache
 }
 
 func NewHandler() *GODNSHandler {
 
 	var (
 		resolver *Resolver
-		Cache    *lru.Cache
+		Cache    *MemoryCache
 	)
 	resolver = &Resolver{}
-	Cache = lru.New(8192)
+	Cache = &MemoryCache{lru.New(MAX_CACHES),  time.Duration(EXPIRE_SECONDS) * time.Second, MAX_CACHES}
 	return &GODNSHandler{resolver, Cache}
 }
 
@@ -45,13 +47,7 @@ func (h *GODNSHandler) do(Net string, w dns.ResponseWriter, req *dns.Msg) {
 	q := req.Question[0]
 	Q := Question{UnFqdn(q.Name), dns.TypeToString[q.Qtype], dns.ClassToString[q.Qclass]}
 
-	var remote net.IP
-	if Net == "tcp" {
-		remote = w.RemoteAddr().(*net.TCPAddr).IP
-	} else {
-		remote = w.RemoteAddr().(*net.UDPAddr).IP
-	}
-	fmt.Println("DNS Lookup ", remote, Q.String())
+	fmt.Println("DNS Lookup ", Q.String())
 
 	IPQuery := h.isIPQuery(q)
 
@@ -60,12 +56,11 @@ func (h *GODNSHandler) do(Net string, w dns.ResponseWriter, req *dns.Msg) {
 	hasher.Write([]byte(Q.String()))
 	key := hex.EncodeToString(hasher.Sum(nil))
 	if IPQuery > 0 {
-		mesg, ok := h.Cache.Get(key)
-		if ok == true {
+		mesg, err := h.Cache.Get(key)
+		if err == nil {
 			fmt.Println("Hit cache", Q.String())
-			msg := mesg.(*dns.Msg)
-			msg.Id = req.Id
-			w.WriteMsg(msg)
+			mesg.Id = req.Id
+			w.WriteMsg(mesg)
 			return
 		}
 	}
@@ -81,8 +76,8 @@ func (h *GODNSHandler) do(Net string, w dns.ResponseWriter, req *dns.Msg) {
 	w.WriteMsg(mesg)
 
 	if IPQuery > 0 && len(mesg.Answer) > 0 {
-		h.Cache.Add(key, mesg)
-		fmt.Println("Insert %s into cache", Q.String())
+		h.Cache.Set(key, mesg)
+		fmt.Println("Insert into cache", Q.String())
 	}
 }
 
