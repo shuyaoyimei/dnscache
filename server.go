@@ -54,7 +54,7 @@ func (s *Server) start(ds *dns.Server) {
 	fmt.Println("Start listener on ", ds.Net, ":", s.Addr())
 	err := ds.ListenAndServe()
 	if err != nil {
-		fmt.Println("Start listener failed:%s", ds.Net, ":", s.Addr(), err.Error())
+		fmt.Println("Start listener failed:", ds.Net, ":", s.Addr(), err.Error())
 	}
 
 }

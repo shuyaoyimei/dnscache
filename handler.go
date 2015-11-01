@@ -1,13 +1,12 @@
 package main
 
 import (
-	"net"
-	"time"
-
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"github.com/golang/groupcache/lru"
 	"github.com/miekg/dns"
+	"net"
 )
 
 const (
@@ -27,31 +26,19 @@ func (q *Question) String() string {
 }
 
 type GODNSHandler struct {
-	resolver        *Resolver
-	cache, negCache Cache
+	resolver *Resolver
+	Cache    *lru.Cache
 }
 
 func NewHandler() *GODNSHandler {
 
 	var (
-		resolver        *Resolver
-		cache, negCache Cache
+		resolver *Resolver
+		Cache    *lru.Cache
 	)
-
 	resolver = &Resolver{}
-
-	cache = &MemoryCache{
-		Backend:  make(map[string]Mesg, 1024),
-		Expire:   time.Duration(3600) * time.Second,
-		Maxcount: 1024,
-	}
-	negCache = &MemoryCache{
-		Backend:  make(map[string]Mesg),
-		Expire:   time.Duration(30) * time.Second / 2,
-		Maxcount: 1024,
-	}
-
-	return &GODNSHandler{resolver, cache, negCache}
+	Cache = lru.New(8192)
+	return &GODNSHandler{resolver, Cache}
 }
 
 func (h *GODNSHandler) do(Net string, w dns.ResponseWriter, req *dns.Msg) {
@@ -64,7 +51,7 @@ func (h *GODNSHandler) do(Net string, w dns.ResponseWriter, req *dns.Msg) {
 	} else {
 		remote = w.RemoteAddr().(*net.UDPAddr).IP
 	}
-	fmt.Println("%s lookup　%s", remote, Q.String())
+	fmt.Println("DNS Lookup ", remote, Q.String())
 
 	IPQuery := h.isIPQuery(q)
 
@@ -73,21 +60,12 @@ func (h *GODNSHandler) do(Net string, w dns.ResponseWriter, req *dns.Msg) {
 	hasher.Write([]byte(Q.String()))
 	key := hex.EncodeToString(hasher.Sum(nil))
 	if IPQuery > 0 {
-		mesg, err := h.cache.Get(key)
-		if err != nil {
-			if mesg, err = h.negCache.Get(key); err != nil {
-				fmt.Println("%s didn't hit cache", Q.String())
-			} else {
-				fmt.Println("%s hit negative cache", Q.String())
-				dns.HandleFailed(w, req)
-				return
-			}
-		} else {
-			fmt.Println("%s hit cache", Q.String())
-			// we need this copy against concurrent modification of Id
-			msg := *mesg
+		mesg, ok := h.Cache.Get(key)
+		if ok == true {
+			fmt.Println("Hit cache", Q.String())
+			msg := mesg.(*dns.Msg)
 			msg.Id = req.Id
-			w.WriteMsg(&msg)
+			w.WriteMsg(msg)
 			return
 		}
 	}
@@ -95,23 +73,15 @@ func (h *GODNSHandler) do(Net string, w dns.ResponseWriter, req *dns.Msg) {
 	mesg, err := h.resolver.Lookup(Net, req)
 
 	if err != nil {
-		fmt.Println("Resolve query error %s", err)
+		fmt.Println("Resolve query error ", err)
 		dns.HandleFailed(w, req)
-
-		// cache the failure, too!
-		if err = h.negCache.Set(key, nil); err != nil {
-			fmt.Println("Set %s negative cache failed: %v", Q.String(), err)
-		}
 		return
 	}
 
 	w.WriteMsg(mesg)
 
 	if IPQuery > 0 && len(mesg.Answer) > 0 {
-		err = h.cache.Set(key, mesg)
-		if err != nil {
-			fmt.Println("Set %s cache failed: %s", Q.String(), err.Error())
-		}
+		h.Cache.Add(key, mesg)
 		fmt.Println("Insert %s into cache", Q.String())
 	}
 }

@@ -1,32 +1,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"github.com/miekg/dns"
 	"strings"
 	"sync"
 	"time"
-	"github.com/miekg/dns"
 )
-
-type ResolvError struct {
-	qname, net  string
-	nameservers []string
-}
-
-func (e ResolvError) Error() string {
-	errmsg := fmt.Sprintf("resolv failed on ", e.qname, " Via ", strings.Join(e.nameservers, "; "), e.net)
-	return errmsg
-}
 
 type Resolver struct {
 }
 
-// Lookup will ask each nameserver in top-to-bottom fashion, starting a new request
-// in every second, and return as early as possbile (have an answer).
-// It returns an error if no request has succeeded.
 func (r *Resolver) Lookup(net string, req *dns.Msg) (message *dns.Msg, err error) {
 	c := &dns.Client{
-		Net:          "tcp",  //Always performance TCP dns query
+		Net:          "tcp", //Always performance TCP dns query
 		ReadTimeout:  r.Timeout(),
 		WriteTimeout: r.Timeout(),
 	}
@@ -40,8 +28,8 @@ func (r *Resolver) Lookup(net string, req *dns.Msg) (message *dns.Msg, err error
 		defer wg.Done()
 		r, rtt, err := c.Exchange(req, nameserver)
 		if err != nil {
-			fmt.Println("%s socket error on %s", qname, nameserver)
-			fmt.Println("error:%s", err.Error())
+			fmt.Println("socket error on ", qname, nameserver)
+			fmt.Println("error:", err.Error())
 			return
 		}
 		// If SERVFAIL happen, should return immediately and try another upstream resolver.
@@ -49,12 +37,12 @@ func (r *Resolver) Lookup(net string, req *dns.Msg) (message *dns.Msg, err error
 		// that it has been verified no such domain existas and ask other resolvers
 		// would make no sense. See more about #20
 		if r != nil && r.Rcode != dns.RcodeSuccess {
-			fmt.Println("%s failed to get an valid answer on %s", qname, nameserver)
+			fmt.Println("Failed to get an valid answer ", qname, nameserver)
 			if r.Rcode == dns.RcodeServerFailure {
 				return
 			}
 		} else {
-			fmt.Println("%s resolv on %s (%s) ttl: %d", UnFqdn(qname), nameserver, net, rtt)
+			fmt.Println("resolv ", UnFqdn(qname), " on ", nameserver, net, rtt)
 		}
 		select {
 		case res <- r:
@@ -82,7 +70,7 @@ func (r *Resolver) Lookup(net string, req *dns.Msg) (message *dns.Msg, err error
 	case r := <-res:
 		return r, nil
 	default:
-		return nil, ResolvError{qname, net, r.Nameservers()}
+		return nil, errors.New(fmt.Sprintf("resolv failed on ", qname, " Via ", strings.Join(r.Nameservers(), "; "), net))
 	}
 
 }
